@@ -1,8 +1,9 @@
 
-// NOTE: This service is now hard-coded to use a specific user API key and model.
+import { getFalApiKey } from './apiKeyStore';
+
+// NOTE: This service now retrieves the FAL API key from localStorage via apiKeyStore.
 // The Google Drive save functionality has been removed in favor of returning the URL to the frontend.
 
-const FAL_API_KEY = "71d25090-8cf6-46ab-9610-02ed341c434f:1c0f856cceba0ae404534335d3c84c9f";
 const KLING_VIDEO_MODEL_URL = "https://fal.ai/api/submit/fal-ai/kling-video/v1.6/pro/image-to-video";
 
 export const generateVideo = async (
@@ -11,8 +12,9 @@ export const generateVideo = async (
     videoPrompt: string,
     setStatusMessage: (msg: string) => void
 ): Promise<string> => {
+    const FAL_API_KEY = getFalApiKey();
     if (!FAL_API_KEY) {
-        throw new Error("FAL_API_KEY is not configured in the application source.");
+        throw new Error("请先在 ⚙️ 设置中配置 FAL API Key");
     }
 
     setStatusMessage("Preparing video request...");
@@ -28,7 +30,7 @@ export const generateVideo = async (
     };
 
     setStatusMessage("Sending to fal.ai...");
-    
+
     // fal.ai has a queue system. You submit a request, get a URL to poll for the result.
     const response = await fetch(KLING_VIDEO_MODEL_URL, {
         method: 'POST',
@@ -52,7 +54,7 @@ export const generateVideo = async (
     if (!resultUrl) {
         throw new Error("Fal.ai did not return a status URL.");
     }
-    
+
     setStatusMessage("Video in progress...");
 
     // Polling logic
@@ -65,11 +67,11 @@ export const generateVideo = async (
         const statusResponse = await fetch(resultUrl, {
             headers: { 'Authorization': `Key ${FAL_API_KEY}`, 'Accept': 'application/json' }
         });
-        
+
         if (!statusResponse.ok) {
             throw new Error(`Failed to get status from fal.ai. Status: ${statusResponse.status}`);
         }
-        
+
         result = await statusResponse.json();
 
         if (result.status === 'COMPLETED') {
@@ -77,7 +79,7 @@ export const generateVideo = async (
         } else if (result.status === 'ERROR') {
             throw new Error(`Video generation failed. The model reported an error: ${result.logs?.map((l: any) => l.message).join('\n') || 'Unknown model error'}`);
         }
-        
+
         setStatusMessage(`In progress: ${result.status.toLowerCase()}...`);
         attempts++;
     }

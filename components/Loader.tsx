@@ -6,10 +6,17 @@ interface LoaderProps {
 
 export const Loader: React.FC<LoaderProps> = ({ message }) => {
   return (
-    <div className="flex flex-col items-center justify-center h-full bg-slate-900/80 p-8 rounded-xl border-2 border-dashed border-slate-700 backdrop-blur-sm">
-      <div className="w-16 h-16 border-4 border-dashed rounded-full animate-spin border-lime-400"></div>
-      <p className="mt-6 text-xl font-semibold text-white">Generating Content...</p>
-      <p className="mt-2 text-slate-400">{message || 'Please wait a moment.'}</p>
+    <div className="fixed bottom-6 right-6 z-50 animate-slide-in-right">
+      <div className="flex items-center gap-4 bg-slate-900/95 p-4 pr-6 rounded-xl border border-slate-700 shadow-2xl backdrop-blur-md">
+        <div className="relative">
+          <div className="w-10 h-10 border-3 border-slate-700 rounded-full"></div>
+          <div className="absolute top-0 left-0 w-10 h-10 border-3 border-lime-400 border-t-transparent rounded-full animate-spin"></div>
+        </div>
+        <div className="flex flex-col">
+          <span className="text-sm font-bold text-white tracking-wide">GENERATING CONTENT</span>
+          <span className="text-xs text-slate-400 font-mono">{message || 'Processing...'}</span>
+        </div>
+      </div>
     </div>
   );
 };
