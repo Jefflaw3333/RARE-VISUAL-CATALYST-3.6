@@ -279,9 +279,91 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, onPerspect
         const pageWidth = doc.internal.pageSize.getWidth();
         const contentWidth = pageWidth - (margin * 2);
         const pageHeight = doc.internal.pageSize.getHeight();
-        const checkPageBreak = (heightNeeded: number) => { if (y + heightNeeded > pageHeight - margin) { doc.addPage(); y = margin; return true; } return false; };
-        const addText = (text: string, fontSize: number = 10, isBold: boolean = false) => { doc.setFontSize(fontSize); doc.setFont('helvetica', isBold ? 'bold' : 'normal'); const lines = doc.splitTextToSize(text, contentWidth); const heightNeeded = lines.length * (fontSize * 0.5); checkPageBreak(heightNeeded); doc.text(lines, margin, y); y += heightNeeded + 5; };
-        addText(`Campaign: ${campaignName || 'AI Content'}`, 18, true); doc.save(`${campaignName || 'generated'}-content.pdf`);
+
+        const checkPageBreak = (heightNeeded: number) => {
+            if (y + heightNeeded > pageHeight - margin) {
+                doc.addPage();
+                y = margin;
+                return true;
+            }
+            return false;
+        };
+
+        const addText = (text: string, fontSize: number = 10, isBold: boolean = false, color: [number, number, number] = [0, 0, 0]) => {
+            doc.setFontSize(fontSize);
+            doc.setTextColor(color[0], color[1], color[2]);
+            doc.setFont('helvetica', isBold ? 'bold' : 'normal');
+            const lines = doc.splitTextToSize(text, contentWidth);
+            const heightNeeded = lines.length * (fontSize * 0.5);
+            checkPageBreak(heightNeeded);
+            doc.text(lines, margin, y);
+            y += heightNeeded + 5;
+        };
+
+        const addHorizontalLine = () => {
+            checkPageBreak(5);
+            doc.setDrawColor(200, 200, 200);
+            doc.line(margin, y, pageWidth - margin, y);
+            y += 10;
+        };
+
+        // Title
+        addText(`CAMPAIGN REPORT: ${campaignName || 'AI Content'}`, 18, true, [0, 100, 0]);
+        addText(`Generated on: ${new Date().toLocaleString()}`, 8, false, [100, 100, 100]);
+        y += 10;
+
+        if (productName) {
+            addText(`Product: ${productName}`, 14, true);
+            y += 5;
+        }
+
+        // Social Posts Section
+        if (Object.keys(socialPosts).length > 0) {
+            addHorizontalLine();
+            addText('SOCIAL MEDIA DISTRIBUTION COPY', 14, true, [0, 100, 200]);
+            y += 5;
+
+            Object.entries(socialPosts).forEach(([platform, post]) => {
+                if (post) {
+                    addText(`${platform.toUpperCase()}`, 11, true, [50, 50, 50]);
+                    addText(post as string, 10, false);
+                    y += 5;
+                }
+            });
+        }
+
+        // Visual Deck Prompts Section
+        if (perspectives.length > 0) {
+            addHorizontalLine();
+            addText('VISUAL DECK & ARTISTIC DIRECTION', 14, true, [150, 0, 150]);
+            y += 5;
+
+            perspectives.forEach((p, index) => {
+                addText(`Shot ${index + 1}: ${p.label}`, 11, true);
+                addText(`Visual Prompt: ${p.prompt}`, 9, false, [80, 80, 80]);
+                if (p.veoPrompt) {
+                    addText(`Video Direction: ${p.veoPrompt}`, 9, false, [0, 100, 100]);
+                }
+                y += 5;
+            });
+        }
+
+        doc.save(`${campaignName || 'generated'}-content-report.pdf`);
+    };
+
+    const handleCopyAllPosts = () => {
+        let allContent = `Campaign: ${campaignName || 'AI Content'}\n`;
+        if (productName) allContent += `Product: ${productName}\n`;
+        allContent += `\n--- SOCIAL MEDIA POSTS ---\n\n`;
+
+        Object.entries(socialPosts).forEach(([platform, post]) => {
+            if (post) {
+                allContent += `[${platform.toUpperCase()}]\n${post}\n\n`;
+            }
+        });
+
+        navigator.clipboard.writeText(allContent);
+        alert('All social posts copied to clipboard!');
     };
 
     const handleSaveToDrive = async () => {
@@ -423,11 +505,20 @@ export const ResultsDisplay: React.FC<ResultsDisplayProps> = ({ data, onPerspect
 
             {/* Social Media Content */}
             {availableSocialPlatforms.length > 0 && (
-                 <div>
-                    <h2 className="text-2xl font-monument mb-6 text-white uppercase tracking-tight flex items-center gap-3">
-                        <div className="w-1.5 h-8 bg-cyan-500"></div>
-                        Copy Distribution
-                    </h2>
+                 <div className="animate-fade-in">
+                    <div className="flex justify-between items-end mb-6">
+                        <h2 className="text-2xl font-monument text-white uppercase tracking-tight flex items-center gap-3">
+                            <div className="w-1.5 h-8 bg-cyan-500"></div>
+                            Copy Distribution
+                        </h2>
+                        <button 
+                            onClick={handleCopyAllPosts}
+                            className="text-xs font-bold text-cyan-400 hover:text-cyan-300 flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-cyan-950/30 border border-cyan-800/50 transition-all"
+                        >
+                            <ClipboardIcon className="w-3.5 h-3.5" />
+                            Copy All Posts
+                        </button>
+                    </div>
                     <div className="bg-slate-900 border border-slate-700 rounded-xl shadow-lg overflow-hidden">
                         <div className="bg-slate-800/50 border-b border-slate-700">
                             <nav className="flex overflow-x-auto no-scrollbar" aria-label="Tabs">

@@ -1,5 +1,5 @@
 {
-  "name": "Content Catalyst Engine_V3.6_20260214",
-  "description": "Upload an image to generate detailed descriptions in English and Chinese, create multiple new image perspectives (close-up, mid, far), and craft engaging social media content tailored to your brand.",
+  "name": "Rare Visual Catalyst Engine3.6",
+  "description": "AI-powered visual content creation engine. Analyze images, generate new perspectives, and craft social media content using Gemini 3.0.",
   "requestFramePermissions": []
 }

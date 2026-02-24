@@ -1,52 +1,51 @@
 
-import { GoogleGenAI, Modality } from "@google/genai";
+import { GoogleGenAI, Type, Modality } from "@google/genai";
 import type { GeneratedData, SocialPosts, GeneratedImage, FocusImageRef, ProductInfo, GeneratedPerspective, VideoPromptConfig, ImageRef, GenerationOptions, CustomLifestyle } from "../types";
-import { getGeminiApiKey, getGeminiEndpoint, getGeminiTextModel, getGeminiImageModel } from './apiKeyStore';
 
 // Helper to get authenticated client with current API Key
 const getAiClient = () => {
-    const apiKey = getGeminiApiKey();
-    if (!apiKey) {
-        throw new Error("请先在 ⚙️ 设置中配置 Gemini API Key");
-    }
-    const endpoint = getGeminiEndpoint();
-    const opts: Record<string, any> = { apiKey };
-    if (endpoint) {
-        opts.httpOptions = { baseUrl: endpoint };
-    }
-    return new GoogleGenAI(opts);
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    throw new Error("API Key not found. Please connect your API key to use Nano Banana Pro.");
+  }
+  return new GoogleGenAI({ apiKey });
 };
 
-// Helper for retry logic with exponential backoff (429 + 503)
-async function retryOperation<T>(operation: () => Promise<T>, retries = 4, delay = 2000): Promise<T> {
+// Helper for retry logic with exponential backoff
+async function retryOperation<T>(operation: () => Promise<T>, retries = 3, delay = 2000): Promise<T> {
     try {
         return await operation();
     } catch (error: any) {
-        const isOverloaded = error?.status === 503 || error?.code === 503
-            || error?.message?.toLowerCase().includes('overloaded')
-            || error?.message?.toLowerCase().includes('unavailable');
-        const isRateLimited = error?.status === 429 || error?.code === 429
-            || error?.message?.includes('429')
-            || error?.message?.toLowerCase().includes('resource_exhausted')
-            || error?.message?.toLowerCase().includes('quota');
-        if (retries > 0 && (isOverloaded || isRateLimited)) {
-            const waitTime = isRateLimited ? Math.max(delay, 3000) : delay;
-            console.warn(`${isRateLimited ? '429 限流' : '503 过载'}，${waitTime}ms 后重试（剩余 ${retries} 次）`);
-            await new Promise(r => setTimeout(r, waitTime));
+        const isOverloaded = error?.status === 503 || error?.code === 503 || (error?.message && error.message.toLowerCase().includes('overloaded')) || (error?.message && error.message.toLowerCase().includes('unavailable'));
+        if (retries > 0 && isOverloaded) {
+            console.warn(`Model overloaded or unavailable (503). Retrying in ${delay}ms... (${retries} retries left)`);
+            await new Promise(resolve => setTimeout(resolve, delay));
             return retryOperation(operation, retries - 1, delay * 2);
         }
         throw error;
     }
 }
 
-// Sequential execution with delay to avoid rate limiting
-async function sequentialWithDelay<T>(tasks: (() => Promise<T>)[], delayMs = 1500): Promise<T[]> {
-    const results: T[] = [];
-    for (let i = 0; i < tasks.length; i++) {
-        if (i > 0) await new Promise(r => setTimeout(r, delayMs));
-        results.push(await tasks[i]());
+// Helper to retry specifically for IMAGE_OTHER finish reason
+async function generateImageWithRetry(ai: GoogleGenAI, request: any, retries = 2): Promise<any> {
+    for (let i = 0; i <= retries; i++) {
+        const response = await retryOperation(() => ai.models.generateContent(request));
+        const parts = getParts(response);
+        const imagePart = parts.find((part: any) => part.inlineData);
+        
+        if (imagePart && imagePart.inlineData) {
+            return response;
+        }
+        
+        const reason = (response as any).candidates?.[0]?.finishReason;
+        if (reason === "IMAGE_OTHER" && i < retries) {
+            console.warn(`Received IMAGE_OTHER. Retrying image generation... (${retries - i} retries left)`);
+            await new Promise(resolve => setTimeout(resolve, 2000));
+            continue;
+        }
+        
+        return response; // Return the response anyway if out of retries or different reason
     }
-    return results;
 }
 
 // Helper to safely extract parts from a response
@@ -61,10 +60,10 @@ const calculateClosestAspectRatio = (aspectRatio: string, customDims?: { width: 
     const ratio = customDims.width / customDims.height;
     const standards = [
         { id: '1:1', value: 1.0 },
-        { id: '16:9', value: 16 / 9 },
-        { id: '9:16', value: 9 / 16 },
-        { id: '4:3', value: 4 / 3 },
-        { id: '3:4', value: 3 / 4 },
+        { id: '16:9', value: 16/9 },
+        { id: '9:16', value: 9/16 },
+        { id: '4:3', value: 4/3 },
+        { id: '3:4', value: 3/4 },
     ];
     let closestId = '1:1';
     let minDiff = Number.MAX_VALUE;
@@ -78,57 +77,23 @@ const calculateClosestAspectRatio = (aspectRatio: string, customDims?: { width: 
     return closestId;
 };
 
+const allSocialProperties: { [key: string]: any } = {
+    facebook: { type: Type.STRING, description: 'A caption for Facebook.' },
+    instagram: { type: Type.STRING, description: 'A caption for Instagram.' },
+    tiktok: { type: Type.STRING, description: 'A script idea or caption for a TikTok.' },
+    youtube: { type: Type.STRING, description: 'A title and description for YouTube.' },
+    pinterest: { type: Type.STRING, description: 'A Pin title and caption.' },
+    x: { type: Type.STRING, description: 'A short caption for X.' },
+    blog: { type: Type.STRING, description: 'A short blog post idea.' }
+};
 
-// Helper to parse JSON from text, handling markdown code blocks and conversational wrappers
-const parseJSON = (text: string): any => {
-    try {
-        // First try standard parsing
-        return JSON.parse(text);
-    } catch (e) {
-        try {
-            // Try extracting from markdown code blocks
-            const markdownMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/);
-            if (markdownMatch) {
-                return JSON.parse(markdownMatch[1]);
-            }
-
-            // Try finding valid JSON object or array
-            const firstCurly = text.indexOf('{');
-            const lastCurly = text.lastIndexOf('}');
-            const firstSquare = text.indexOf('[');
-            const lastSquare = text.lastIndexOf(']');
-
-            let start = -1;
-            let end = -1;
-
-            // Determine if object or array is the primary structure
-            const hasObject = firstCurly !== -1 && lastCurly > firstCurly;
-            const hasArray = firstSquare !== -1 && lastSquare > firstSquare;
-
-            if (hasObject && hasArray) {
-                if (firstCurly < firstSquare) {
-                    start = firstCurly;
-                    end = lastCurly;
-                } else {
-                    start = firstSquare;
-                    end = lastSquare;
-                }
-            } else if (hasObject) {
-                start = firstCurly;
-                end = lastCurly;
-            } else if (hasArray) {
-                start = firstSquare;
-                end = lastSquare;
-            }
-
-            if (start !== -1 && end !== -1) {
-                return JSON.parse(text.substring(start, end + 1));
-            }
-        } catch (innerE) {
-            console.error("Failed to parse JSON:", text);
-        }
-        throw new Error("Invalid JSON response from API");
-    }
+const socialCopySchema = {
+    type: Type.OBJECT,
+    properties: {
+        english_post: { type: Type.STRING },
+        chinese_post: { type: Type.STRING }
+    },
+    required: ['english_post', 'chinese_post']
 };
 
 const perspectiveLabelMap: { [key: string]: string } = {
@@ -219,14 +184,13 @@ const descriptionInstruction = `\n\nFinally, provide a short one-sentence descri
 async function generateSocialCopyForImage(image: ImageRef, productInfo: ProductInfo): Promise<{ en: string; cn: string; }> {
     const ai = getAiClient();
     const imagePart = { inlineData: { data: image.base64, mimeType: image.mimeType } };
-    const socialCopyPrompt = `Expert copywriter persona. Analyze image for product: ${productInfo.name}. Create engaging post. 
-    RETURN ONLY RAW JSON. NO MARKDOWN.
-    Format: {"english_post": "...", "chinese_post": "..."}`;
+    const socialCopyPrompt = `Expert copywriter persona. Analyze image for product: ${productInfo.name}. Create engaging post. Output JSON: {"english_post": "...", "chinese_post": "..."}`;
     const response = await ai.models.generateContent({
-        model: getGeminiTextModel(),
-        contents: { parts: [imagePart, { text: socialCopyPrompt }] }
+        model: 'gemini-3-pro-preview',
+        contents: { parts: [imagePart, { text: socialCopyPrompt }] },
+        config: { responseMimeType: "application/json", responseSchema: socialCopySchema }
     });
-    const parsed = parseJSON(response.text || "{}");
+    const parsed = JSON.parse(response.text.trim());
     return { en: parsed.english_post, cn: parsed.chinese_post };
 }
 
@@ -247,17 +211,14 @@ async function generateCreativeImagePrompts(
 ): Promise<CreativePromptResult[]> {
     const ai = getAiClient();
     const { lifestyleScene, selectedSocialStrategies, consistencyMode, sensualMode, ugcMode, styleFilter, creativityBoost, targetRegion, targetAudience, selectedFocusSubjects } = generationOptions;
-
-    const modelName = getGeminiTextModel();
-    console.log(`[Gemini Service] Generating creative prompts using model: ${modelName}`);
-
+    
     const combinedAtmosphere = [...lifestyleScene.atmosphere, customLifestyle.atmosphere].filter(Boolean).join(', ');
     const styleFilterDesc = styleFilter ? styleFilterPromptMap[styleFilter] : "Clean professional photography";
     const socialStrategyContext = selectedSocialStrategies.length > 0 ? selectedSocialStrategies.map(s => strategyPromptMap[s]).join('\n') : "Standard professional.";
     const focusContext = selectedFocusSubjects && selectedFocusSubjects.length > 0 ? selectedFocusSubjects.join(', ') : 'Whole Product';
 
     // Flexible UGC / Lo-Fi Authenticity Logic
-    const ugcInstruction = ugcMode
+    const ugcInstruction = ugcMode 
         ? `
         *** SPECIAL STYLE MODE: LO-FI AUTHENTICITY (UGC) ***
         The user wants to evoke "Digital Imperfection" to build trust, but implies different types of authenticity.
@@ -274,7 +235,7 @@ async function generateCreativeImagePrompts(
         - Avoid "studio perfection", "perfect bokeh", or "artificial softbox lighting".
         - Use "shot on iPhone", "posted on Snapchat", "raw photo", "no filter" as style guides.
         - Ensure the product remains the clear focus, even if the vibe is "messy".
-        `
+        ` 
         : "";
 
     const promptRequest = `Visual Director Persona. 
@@ -297,50 +258,27 @@ async function generateCreativeImagePrompts(
     ${ugcMode ? 'Ensure every single prompt adheres to the Lo-Fi/UGC aesthetic instructions above, varying the specific type of authenticity (flash vs daylight vs texture).' : ''}
     
     Output JSON: { "perspectives": [ { "imagePrompt": "...", "veoPrompt": "..." } ] } 
-    Angles: ${expandedAnglesWithIds.map(a => a.angle).join('\n')}
-    
-    RETURN ONLY RAW JSON. NO MARKDOWN.`;
+    Angles: ${expandedAnglesWithIds.map(a => a.angle).join('\n')}`;
 
     const response = await ai.models.generateContent({
-        model: getGeminiTextModel(),
-        contents: { parts: [...imageParts, { text: promptRequest }] }
+        model: 'gemini-3-pro-preview',
+        contents: { parts: [...imageParts, { text: promptRequest }] },
+        config: { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { perspectives: { type: Type.ARRAY, items: { type: Type.OBJECT, properties: { imagePrompt: { type: Type.STRING }, veoPrompt: { type: Type.STRING } } } } } } }
     });
-
-    console.log("Gemini Raw Response:", response.text); // Debugging
-
-    let parsed: any = {};
-    try {
-        parsed = parseJSON(response.text || "{}");
-    } catch (e) {
-        console.error("JSON Parse Failed, Raw Text:", response.text);
-        throw e;
-    }
-
-    // Handle case where model returns just the array
-    const perspectivesArray = Array.isArray(parsed) ? parsed : (parsed.perspectives || parsed.angles || []);
-
-    if (!perspectivesArray || !Array.isArray(perspectivesArray) || perspectivesArray.length === 0) {
-        throw new Error("Invalid/Empty perspectives array in response");
-    }
-
-    return perspectivesArray.map((p: any, i: number) => ({
-        ...p,
-        originalAngleId: expandedAnglesWithIds[i]?.id || 'unknown',
-        variationIndex: expandedAnglesWithIds[i]?.index || 1
-    }));
+    const parsed = JSON.parse(response.text.trim());
+    return parsed.perspectives.map((p: any, i: number) => ({ ...p, originalAngleId: expandedAnglesWithIds[i].id, variationIndex: expandedAnglesWithIds[i].index }));
 }
 
 export async function generateBrainstormAngles(mainImage: ImageRef, productInfo: ProductInfo): Promise<string[]> {
     const ai = getAiClient();
     const imagePart = { inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType } };
-    const prompt = `Analyze product: ${productInfo.name}. Suggest 3 creative high-impact camera angles. 
-    RETURN ONLY RAW JSON. NO MARKDOWN.
-    JSON: { "angles": ["Idea 1", "..."] }`;
+    const prompt = `Analyze product: ${productInfo.name}. Suggest 3 creative high-impact camera angles. JSON: { "angles": ["Idea 1", "..."] }`;
     const response = await ai.models.generateContent({
-        model: getGeminiTextModel(),
-        contents: { parts: [imagePart, { text: prompt }] }
+        model: 'gemini-3-pro-preview',
+        contents: { parts: [imagePart, { text: prompt }] },
+        config: { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { angles: { type: Type.ARRAY, items: { type: Type.STRING } } } } }
     });
-    const parsed = parseJSON(response.text || "{}");
+    const parsed = JSON.parse(response.text.trim());
     return parsed.angles || [];
 }
 
@@ -366,54 +304,50 @@ export const generateContentFromImage = async (
     const targetAspectRatio = calculateClosestAspectRatio(aspectRatio || '1:1', customDimensions);
     let socialPosts: SocialPosts = {};
     try {
-
-        const strategyInstruction = selectedSocialStrategies.length > 0 ? `Tone/Strategy: ${selectedSocialStrategies.map(id => strategyPromptMap[id]).join(', ')}` : '';
-        const socialPrompt = `Social Manager Persona. Copy for: ${selectedSocialPlatforms.join(', ')}. Product: ${productInfo.name}. ${strategyInstruction}. Goal: ${generationDescription}.
-        RETURN ONLY RAW JSON. NO MARKDOWN.
-        Format: { "facebook": "...", "instagram": "...", ... }`;
-        const socialResponse = await ai.models.generateContent({
-            model: getGeminiTextModel(), contents: { parts: [...allImageParts, { text: socialPrompt }] }
+        const selectedSocialProperties: { [key: string]: any } = {};
+        selectedSocialPlatforms.forEach(platform => {
+            const key = platform.toLowerCase();
+            if (allSocialProperties[key]) selectedSocialProperties[key] = allSocialProperties[key];
         });
-        console.log(`[Gemini Service] Social copy generated using model: ${getGeminiTextModel()}`);
-        const parsedSocial = parseJSON(socialResponse.text || "{}");
+        const dynamicSocialMediaSchema = { type: Type.OBJECT, properties: selectedSocialProperties };
+        const strategyInstruction = selectedSocialStrategies.length > 0 ? `Tone/Strategy: ${selectedSocialStrategies.map(id => strategyPromptMap[id]).join(', ')}` : '';
+        const socialPrompt = `Social Manager Persona. Copy for: ${selectedSocialPlatforms.join(', ')}. Product: ${productInfo.name}. ${strategyInstruction}. Goal: ${generationDescription}`;
+        const socialResponse = await ai.models.generateContent({
+            model: 'gemini-3-pro-preview', contents: { parts: [...allImageParts, { text: socialPrompt }] }, config: { responseMimeType: "application/json", responseSchema: dynamicSocialMediaSchema }
+        });
+        const parsedSocial = JSON.parse(socialResponse.text.trim());
         selectedSocialPlatforms.forEach(platform => {
             const key = platform.toLowerCase() as keyof SocialPosts;
-            if (parsedSocial[key]) socialPosts[key] = parsedSocial[key];
+            if(parsedSocial[key]) socialPosts[key] = parsedSocial[key];
         });
-    } catch (e) { }
+    } catch (e) {}
     setLoadingMessage(`Designing perspectives...`);
     const expandedAnglesWithIds: { angle: string, id: string, index: number }[] = [];
-    selectedAngles.forEach(angleId => { for (let i = 0; i < imagesPerAngle; i++) { expandedAnglesWithIds.push({ angle: imagesPerAngle > 1 ? `${angleId} (Var ${i + 1})` : angleId, id: angleId, index: i + 1 }); } });
+    selectedAngles.forEach(angleId => { for(let i=0; i<imagesPerAngle; i++) { expandedAnglesWithIds.push({ angle: imagesPerAngle > 1 ? `${angleId} (Var ${i+1})` : angleId, id: angleId, index: i + 1 }); } });
     let creativePerspectives: CreativePromptResult[] = [];
     try {
         creativePerspectives = await generateCreativeImagePrompts([mainImagePart, ...referenceImageParts], expandedAnglesWithIds, productInfo, generationDescription, generationOptions, customLifestyle);
-    } catch (e: any) {
-        console.error('⚠️ generateCreativeImagePrompts failed:', e);
-        console.error('Stack trace:', e.stack);
-        // Also log the raw error object if possible
-        if (e.response) {
-            console.error('API Error Response:', JSON.stringify(e.response, null, 2));
-        }
-        creativePerspectives = expandedAnglesWithIds.map(item => ({ imagePrompt: `Pro shot of ${productInfo.name || 'product'}, ${item.angle}.`, veoPrompt: `Cinematic video of ${productInfo.name || 'product'}, ${item.angle}.`, originalAngleId: item.id, variationIndex: item.index }));
+    } catch (e) {
+        creativePerspectives = expandedAnglesWithIds.map(item => ({ imagePrompt: `Pro shot of ${productInfo.name}, ${item.angle}.`, veoPrompt: `Cinematic video of ${item.angle}.`, originalAngleId: item.id, variationIndex: item.index }));
     }
     setLoadingMessage(`Rendering images (Nano Banana Pro)...`);
     let perspectives: GeneratedPerspective[] = [];
     try {
-
-        const perspectiveTasks = creativePerspectives.map((perspectiveData) => () => (async () => {
+        const perspectivePromises = creativePerspectives.map(async (perspectiveData) => {
             const { originalAngleId, variationIndex, imagePrompt, veoPrompt } = perspectiveData;
             const partsForGeneration = [...allImageParts];
             if (focusImageRef) partsForGeneration.push({ inlineData: { data: focusImageRef.base64, mimeType: focusImageRef.mimeType } });
             partsForGeneration.push({ text: `Generate image: "${imagePrompt}". ${descriptionInstruction}` });
-
-            const imageResponse = await retryOperation(() => ai.models.generateContent({
-                model: getGeminiImageModel(),
+            
+            // WRAP WITH RETRY
+            const imageResponse = await generateImageWithRetry(ai, {
+                model: 'gemini-3-pro-image-preview',
                 contents: { parts: partsForGeneration },
                 config: {
                     imageConfig: { aspectRatio: targetAspectRatio, imageSize: "1K" }
                 }
-            }));
-
+            });
+            
             const parts = getParts(imageResponse);
             const imagePart = parts.find(part => part.inlineData);
             const textPart = parts.find(part => part.text);
@@ -426,10 +360,10 @@ export const generateContentFromImage = async (
             if (imagesPerAngle > 1) label = `${label} #${variationIndex}`;
             const uniqueId = `${originalAngleId}-${variationIndex}-${Date.now()}`;
             const perspective: GeneratedPerspective = { id: uniqueId, label, prompt: imagePrompt, veoPrompt, mainImage: { src, label, description } };
-            if (generateSocialCopy) { try { perspective.socialCopy = await generateSocialCopyForImage({ base64: base64Image, mimeType }, productInfo); } catch (e) { } }
+            if (generateSocialCopy) { try { perspective.socialCopy = await generateSocialCopyForImage({ base64: base64Image, mimeType }, productInfo); } catch (e) {} }
             return perspective;
-        })());
-        const resolvedPerspectives = await sequentialWithDelay(perspectiveTasks);
+        });
+        const resolvedPerspectives = await Promise.all(perspectivePromises);
         perspectives = resolvedPerspectives.filter((p): p is GeneratedPerspective => p !== null);
     } catch (e: any) { throw new Error(`Image generation failed: ${e.message}`); }
     return { socialPosts, perspectives };
@@ -439,23 +373,23 @@ export const generateSingleImage = async (prompt: string, mainImage: ImageRef, s
     const ai = getAiClient();
     const partsForGeneration: any[] = [{ inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType } }, ...secondaryImages.map(img => ({ inlineData: { data: img.base64, mimeType: img.mimeType } })), ...referenceImages.map(img => ({ inlineData: { data: img.base64, mimeType: img.mimeType } }))];
     if (focusImageRef) partsForGeneration.push({ inlineData: { data: focusImageRef.base64, mimeType: focusImageRef.mimeType } });
-    partsForGeneration.push({ text: prompt + descriptionInstruction });
+    partsForGeneration.push({ text: `Generate image: "${prompt}". ${descriptionInstruction}` });
     const targetAspectRatio = calculateClosestAspectRatio(aspectRatio || '1:1', customDimensions);
-
+    
     // WRAP WITH RETRY
-    const response = await retryOperation(() => ai.models.generateContent({
-        model: getGeminiImageModel(),
+    const response = await generateImageWithRetry(ai, {
+        model: 'gemini-3-pro-image-preview',
         contents: { parts: partsForGeneration },
         config: {
             imageConfig: { aspectRatio: targetAspectRatio, imageSize: "1K" }
         }
-    }));
-
+    });
+    
     const parts = getParts(response);
     const imagePart = parts.find(part => part.inlineData);
     const textPart = parts.find(part => part.text);
     if (imagePart && imagePart.inlineData) return { src: `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`, label: 'Regenerated', description: parseDescription(textPart?.text) };
-
+    
     // Detailed error for regeneration failures (often safety blocks)
     // Cast to any to access candidates which might be missing on type definition but present in response
     const reason = (response as any).candidates?.[0]?.finishReason || "UNKNOWN";
@@ -478,44 +412,45 @@ export const generateMoreImages = async (mainImage: ImageRef, secondaryImages: I
     const allReferenceImageParts = [mainImagePart, ...secondaryImageParts, ...referenceImageParts, ...existingImageParts];
     if (focusImageRef) allReferenceImageParts.push({ inlineData: { data: focusImageRef.base64, mimeType: focusImageRef.mimeType } });
     setLoadingMessage("Rendering expanded images...");
-    const imageTasks = [1, 2].map((num) => () => (async () => {
+    const imagePromises = [1, 2].map(async (num) => {
         const partsForGeneration = [...allReferenceImageParts, { text: basePrompt + "\n" + descriptionInstruction }];
-
-        const res = await retryOperation(() => ai.models.generateContent({
-            model: getGeminiImageModel(),
+        
+        // WRAP WITH RETRY
+        const res = await generateImageWithRetry(ai, {
+            model: 'gemini-3-pro-image-preview',
             contents: { parts: partsForGeneration },
             config: {
                 imageConfig: { aspectRatio: targetAspectRatio, imageSize: "1K" }
             }
-        }));
-
+        });
+        
         const parts = getParts(res);
         const imagePart = parts.find(part => part.inlineData);
         const textPart = parts.find(part => part.text);
         if (imagePart && imagePart.inlineData) {
             const src = `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
             const perspective: GeneratedPerspective = { id: `expansion-${Date.now()}-${num}`, label: expansionPrompt.substring(0, 15) + `... (${num})`, prompt: basePrompt, veoPrompt: `Cinematic video.`, mainImage: { src, label: 'Expansion', description: parseDescription(textPart?.text) } };
-            if (generateSocialCopy) { try { perspective.socialCopy = await generateSocialCopyForImage({ base64: imagePart.inlineData.data, mimeType: imagePart.inlineData.mimeType }, productInfo); } catch (e) { } }
+            if (generateSocialCopy) { try { perspective.socialCopy = await generateSocialCopyForImage({ base64: imagePart.inlineData.data, mimeType: imagePart.inlineData.mimeType }, productInfo); } catch (e) {} }
             return perspective;
         }
         return null;
-    })());
-    const newPerspectives = await sequentialWithDelay(imageTasks);
+    });
+    const newPerspectives = await Promise.all(imagePromises);
     return newPerspectives.filter((p): p is GeneratedPerspective => p !== null);
 };
 
 export const editImage = async (originalImageBase64: string, originalImageMimeType: string, maskBase64: string, prompt: string): Promise<string> => {
     const ai = getAiClient();
-
+    
     // WRAP WITH RETRY
-    const response = await retryOperation(() => ai.models.generateContent({
-        model: getGeminiImageModel(),
-        contents: { parts: [{ inlineData: { data: originalImageBase64, mimeType: originalImageMimeType } }, { inlineData: { data: maskBase64, mimeType: 'image/png' } }, { text: `Edit masked area: "${prompt}". ${descriptionInstruction}` }] },
+    const response = await generateImageWithRetry(ai, {
+        model: 'gemini-3-pro-image-preview',
+        contents: { parts: [ { inlineData: { data: originalImageBase64, mimeType: originalImageMimeType } }, { inlineData: { data: maskBase64, mimeType: 'image/png' } }, { text: `Edit masked area: "${prompt}". ${descriptionInstruction}` } ]},
         config: {
             imageConfig: { aspectRatio: "1:1", imageSize: "1K" }
         }
-    }));
-
+    });
+    
     const parts = getParts(response);
     const imagePart = parts.find(part => part.inlineData);
     if (imagePart && imagePart.inlineData) return `data:${imagePart.inlineData.mimeType};base64,${imagePart.inlineData.data}`;
@@ -524,16 +459,16 @@ export const editImage = async (originalImageBase64: string, originalImageMimeTy
 
 export const refineImage = async (originalImage: ImageRef, refinePrompt: string): Promise<GeneratedImage> => {
     const ai = getAiClient();
-
+    
     // WRAP WITH RETRY
-    const response = await retryOperation(() => ai.models.generateContent({
-        model: getGeminiImageModel(),
-        contents: { parts: [{ inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } }, { text: `Refine image: "${refinePrompt}". ${descriptionInstruction}` }] },
+    const response = await generateImageWithRetry(ai, {
+        model: 'gemini-3-pro-image-preview',
+        contents: { parts: [ { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } }, { text: `Refine image: "${refinePrompt}". ${descriptionInstruction}` } ]},
         config: {
             imageConfig: { aspectRatio: "1:1", imageSize: "1K" }
         }
-    }));
-
+    });
+    
     const parts = getParts(response);
     const imagePart = parts.find(part => part.inlineData);
     const textPartResponse = parts.find(part => part.text);
@@ -543,22 +478,23 @@ export const refineImage = async (originalImage: ImageRef, refinePrompt: string)
 
 export const generateImageVariations = async (originalImage: ImageRef): Promise<GeneratedImage[]> => {
     const ai = getAiClient();
-    const variationTasks = [1, 2, 3].map(() => () =>
+    const imagePromises = [1, 2, 3].map(() => 
+        // WRAP WITH RETRY
         retryOperation(() => ai.models.generateContent({
-            model: getGeminiImageModel(),
-            contents: { parts: [{ inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } }, { text: `Generate variation. ${descriptionInstruction}` }] },
+            model: 'gemini-3-pro-image-preview',
+            contents: { parts: [ { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } }, { text: `Generate variation. ${descriptionInstruction}` } ]},
             config: {
                 imageConfig: { aspectRatio: "1:1", imageSize: "1K" }
             }
         }))
     );
-    const results = await sequentialWithDelay(variationTasks);
-    return results.map((res): GeneratedImage | null => {
-        const parts = getParts(res);
-        const i = parts.find(p => p.inlineData);
-        const t = parts.find(p => p.text);
-        if (i && i.inlineData) return { src: `data:${i.inlineData.mimeType};base64,${i.inlineData.data}`, label: 'Variation', description: parseDescription(t?.text) };
-        return null;
+    const results = await Promise.all(imagePromises);
+    return results.map((res): GeneratedImage | null => { 
+        const parts = getParts(res); 
+        const i = parts.find(p => p.inlineData); 
+        const t = parts.find(p => p.text); 
+        if (i && i.inlineData) return { src: `data:${i.inlineData.mimeType};base64,${i.inlineData.data}`, label: 'Variation', description: parseDescription(t?.text) }; 
+        return null; 
     }).filter((v): v is GeneratedImage => v !== null);
 };
 
@@ -566,25 +502,23 @@ export const extendFrameForVideo = async (originalImage: ImageRef): Promise<{ ex
     const ai = getAiClient();
     const imagePart = { inlineData: { data: originalImage.base64, mimeType: originalImage.mimeType } };
     const prompts = [{ p: "Zoom out.", l: "Zoom Out" }, { p: "Extend left.", l: "Pan Left" }, { p: "Extend up.", l: "Tilt Up" }, { p: "Extend right.", l: "Pan Right" }];
-    const imageTasks = prompts.map(({ p, l }) => () =>
+    const imagePromises = prompts.map(({ p, l }) => 
+        // WRAP WITH RETRY
         retryOperation(() => ai.models.generateContent({
-            model: getGeminiImageModel(),
+            model: 'gemini-3-pro-image-preview',
             contents: { parts: [imagePart, { text: p + descriptionInstruction }] },
             config: {
                 imageConfig: { aspectRatio: "1:1", imageSize: "1K" }
             }
         })).then(res => { const parts = getParts(res); const i = parts.find(pt => pt.inlineData); const t = parts.find(pt => pt.text); if (i && i.inlineData) return { src: `data:${i.inlineData.mimeType};base64,${i.inlineData.data}`, label: l, description: parseDescription(t?.text) }; throw new Error('Fail'); })
     );
-    const textPromise = ai.models.generateContent({
-        model: getGeminiTextModel(),
-        contents: { parts: [imagePart, { text: "Provide transition text. RETURN ONLY RAW JSON. NO MARKDOWN. Format: { \"en\": \"...\", \"cn\": \"...\" }" }] }
-    }).then(res => parseJSON(res.text || "{}"));
-    const [extendedImages, transitionText] = await Promise.all([sequentialWithDelay(imageTasks), textPromise]);
+    const textPromise = ai.models.generateContent({ model: 'gemini-3-pro-preview', contents: { parts: [imagePart, { text: "JSON: {en, cn} transition text." }] }, config: { responseMimeType: "application/json", responseSchema: { type: Type.OBJECT, properties: { en: { type: Type.STRING }, cn: { type: Type.STRING } } } } }).then(res => JSON.parse(res.text.trim()));
+    const [extendedImages, transitionText] = await Promise.all([Promise.all(imagePromises), textPromise]);
     return { extendedImages, transitionText };
 };
 
 export const analyzeImage = async (imageRef: ImageRef): Promise<string> => {
     const ai = getAiClient();
-    const response = await ai.models.generateContent({ model: getGeminiTextModel(), contents: { parts: [{ inlineData: { data: imageRef.base64, mimeType: imageRef.mimeType } }, { text: `Detailed visual analysis covering composition, lighting, color, subject, and atmosphere.` }] }, });
+    const response = await ai.models.generateContent({ model: 'gemini-3-pro-preview', contents: { parts: [ { inlineData: { data: imageRef.base64, mimeType: imageRef.mimeType } }, { text: `Detailed visual analysis covering composition, lighting, color, subject, and atmosphere.` } ]}, });
     return response.text;
 };
