@@ -1,7 +1,7 @@
 
 import { GoogleGenAI, Modality } from "@google/genai";
 import type { GeneratedData, SocialPosts, GeneratedImage, FocusImageRef, ProductInfo, GeneratedPerspective, VideoPromptConfig, ImageRef, GenerationOptions, CustomLifestyle } from "../types";
-import { getGeminiApiKey, getGeminiEndpoint, getGeminiProModel, getGeminiFastModel, getGeminiImageModel } from './apiKeyStore';
+import { getGeminiApiKey, getGeminiProModel, getGeminiFastModel, getGeminiImageModel } from './apiKeyStore';
 
 // Helper to get authenticated client with current API Key
 const getAiClient = () => {
@@ -9,12 +9,7 @@ const getAiClient = () => {
     if (!apiKey) {
         throw new Error("请先在 ⚙️ 设置中配置 Gemini API Key");
     }
-    const endpoint = getGeminiEndpoint();
-    const opts: Record<string, any> = { apiKey };
-    if (endpoint) {
-        opts.httpOptions = { baseUrl: endpoint };
-    }
-    return new GoogleGenAI(opts);
+    return new GoogleGenAI({ apiKey });
 };
 
 // Helper for retry logic with exponential backoff (429 + 503)

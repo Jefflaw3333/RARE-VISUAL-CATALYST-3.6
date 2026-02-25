@@ -20,11 +20,6 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose }) => 
 
     if (!isOpen) return null;
 
-    const handleChange = (field: keyof ApiKeys, value: string) => {
-        setKeys(prev => ({ ...prev, [field]: value }));
-        setSaved(false);
-    };
-
     const handleSave = () => {
         saveAllKeys(keys);
         setSaved(true);
@@ -33,21 +28,18 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose }) => 
 
     const handleClear = () => {
         clearAllKeys();
-        setKeys({ geminiApiKey: '', geminiEndpoint: '', geminiProModel: '', geminiFastModel: '', geminiImageModel: '', falApiKey: '' });
+        setKeys({ geminiApiKey: '' });
         setSaved(false);
     };
 
-    const inputClass = "w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-lime-500/50 focus:border-lime-500 transition-colors";
-    const labelClass = "block text-xs font-medium text-slate-400 mb-1";
-
     return (
         <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-sm flex items-center justify-center animate-fade-in" onClick={onClose}>
-            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-lg mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
+            <div className="bg-slate-900 border border-slate-700 rounded-2xl shadow-2xl w-full max-w-md mx-4 overflow-hidden" onClick={e => e.stopPropagation()}>
                 {/* Header */}
                 <div className="px-6 py-4 border-b border-slate-700 flex items-center justify-between">
                     <div>
                         <h2 className="text-lg font-bold text-white">API Configuration</h2>
-                        <p className="text-xs text-slate-400 mt-0.5">Keys are stored locally in your browser</p>
+                        <p className="text-xs text-slate-400 mt-0.5">Enter your Gemini API Key to get started</p>
                     </div>
                     <button onClick={onClose} className="text-slate-400 hover:text-white transition-colors p-1">
                         <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" viewBox="0 0 20 20" fill="currentColor">
@@ -57,103 +49,28 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose }) => 
                 </div>
 
                 {/* Body */}
-                <div className="px-6 py-5 space-y-4 max-h-[65vh] overflow-y-auto">
-                    {/* Gemini API Key */}
-                    <div>
-                        <label className={labelClass}>Gemini API Key <span className="text-red-400">*</span></label>
-                        <div className="relative">
-                            <input
-                                type={showKey ? 'text' : 'password'}
-                                value={keys.geminiApiKey}
-                                onChange={e => handleChange('geminiApiKey', e.target.value)}
-                                placeholder="AIzaSy... or sk-..."
-                                className={inputClass}
-                            />
-                            <button
-                                onClick={() => setShowKey(!showKey)}
-                                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-lime-400 transition-colors"
-                            >
-                                {showKey ? 'Hide' : 'Show'}
-                            </button>
-                        </div>
-                    </div>
-
-                    {/* Endpoint */}
-                    <div>
-                        <label className={labelClass}>API Endpoint <span className="text-slate-600">(optional)</span></label>
+                <div className="px-6 py-5">
+                    <label className="block text-xs font-medium text-slate-400 mb-1.5">
+                        Gemini API Key <span className="text-red-400">*</span>
+                    </label>
+                    <div className="relative">
                         <input
-                            type="text"
-                            value={keys.geminiEndpoint}
-                            onChange={e => handleChange('geminiEndpoint', e.target.value)}
-                            placeholder="/gemini-proxy or https://your-proxy.dev"
-                            className={inputClass}
+                            type={showKey ? 'text' : 'password'}
+                            value={keys.geminiApiKey}
+                            onChange={e => { setKeys({ geminiApiKey: e.target.value }); setSaved(false); }}
+                            placeholder="AIzaSy..."
+                            className="w-full bg-slate-800 border border-slate-600 rounded-lg px-3 py-2.5 text-sm text-slate-200 placeholder-slate-500 focus:outline-none focus:ring-2 focus:ring-lime-500/50 focus:border-lime-500 transition-colors"
                         />
-                        <p className="text-[10px] text-slate-500 mt-1">Leave empty to use official Google endpoint</p>
+                        <button
+                            onClick={() => setShowKey(!showKey)}
+                            className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-slate-500 hover:text-lime-400 transition-colors"
+                        >
+                            {showKey ? 'Hide' : 'Show'}
+                        </button>
                     </div>
-
-                    {/* Model Routing — tiered */}
-                    <div className="border border-slate-700/60 rounded-xl p-4 space-y-3 bg-slate-800/30">
-                        <p className="text-xs font-semibold text-slate-300 flex items-center gap-1.5">
-                            ⚡ Model Routing
-                            <span className="text-slate-500 font-normal">— 80% fast / 20% pro</span>
-                        </p>
-
-                        {/* Pro Model */}
-                        <div>
-                            <label className={labelClass}>
-                                🔥 Pro Model
-                                <span className="ml-1.5 text-slate-600 font-normal">vision copy &amp; analysis</span>
-                            </label>
-                            <input
-                                type="text"
-                                value={keys.geminiProModel}
-                                onChange={e => handleChange('geminiProModel', e.target.value)}
-                                placeholder="Default: gemini-3-pro-high"
-                                className={inputClass}
-                            />
-                        </div>
-
-                        {/* Fast Model */}
-                        <div>
-                            <label className={labelClass}>
-                                ⚡ Fast Model
-                                <span className="ml-1.5 text-slate-600 font-normal">brainstorm &amp; prompts</span>
-                            </label>
-                            <input
-                                type="text"
-                                value={keys.geminiFastModel}
-                                onChange={e => handleChange('geminiFastModel', e.target.value)}
-                                placeholder="Default: gemini-1.5-flash"
-                                className={inputClass}
-                            />
-                        </div>
-
-                        {/* Image Gen Model */}
-                        <div>
-                            <label className={labelClass}>
-                                🖼 Image Gen Model
-                                <span className="ml-1.5 text-slate-600 font-normal">image output</span>
-                            </label>
-                            <input
-                                type="text"
-                                value={keys.geminiImageModel}
-                                onChange={e => handleChange('geminiImageModel', e.target.value)}
-                                placeholder="Default: gemini-3-pro-high"
-                                className={inputClass}
-                            />
-                        </div>
-                    </div>
-
-                    <div className="border-t border-slate-700 pt-4">
-                        <label className={labelClass}>FAL API Key <span className="text-slate-600">(for video)</span></label>
-                        <input
-                            type="password"
-                            value={keys.falApiKey}
-                            onChange={e => handleChange('falApiKey', e.target.value)}
-                            placeholder="fal.ai API Key"
-                            className={inputClass}
-                        />
-                    </div>
+                    <p className="text-[10px] text-slate-500 mt-2">
+                        Get your key from <a href="https://aistudio.google.com/apikey" target="_blank" rel="noopener noreferrer" className="text-lime-500 hover:text-lime-400 underline">Google AI Studio</a>
+                    </p>
                 </div>
 
                 {/* Footer */}
@@ -162,7 +79,7 @@ export const ApiKeyModal: React.FC<ApiKeyModalProps> = ({ isOpen, onClose }) => 
                         onClick={handleClear}
                         className="text-sm text-red-400 hover:text-red-300 transition-colors"
                     >
-                        Clear All
+                        Clear
                     </button>
                     <div className="flex items-center gap-3">
                         {saved && <span className="text-xs text-lime-400 animate-pulse">✓ Saved</span>}
