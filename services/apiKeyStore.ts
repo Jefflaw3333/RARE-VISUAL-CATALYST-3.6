@@ -14,9 +14,9 @@ export const setGeminiApiKey = (v: string) =>
     v ? localStorage.setItem(STORAGE_KEY, v) : localStorage.removeItem(STORAGE_KEY);
 
 // --- Hard-coded models (no user config needed) ---
-export const getGeminiProModel = (): string => 'gemini-2.0-flash';
-export const getGeminiFastModel = (): string => 'gemini-2.0-flash';
-export const getGeminiImageModel = (): string => 'gemini-2.0-flash-preview-image-generation';
+export const getGeminiProModel = (): string => 'gemini-2.5-pro';
+export const getGeminiFastModel = (): string => 'gemini-2.5-flash';
+export const getGeminiImageModel = (): string => 'gemini-3-pro-high';
 
 // Backward compat aliases
 export const getGeminiTextModel = getGeminiProModel;
