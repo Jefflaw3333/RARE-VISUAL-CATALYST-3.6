@@ -16,7 +16,7 @@ export const setGeminiApiKey = (v: string) =>
 // --- Hard-coded models (no user config needed) ---
 export const getGeminiProModel = (): string => 'gemini-2.5-pro';
 export const getGeminiFastModel = (): string => 'gemini-2.5-flash';
-export const getGeminiImageModel = (): string => 'gemini-3-pro-high';
+export const getGeminiImageModel = (): string => 'gemini-3-pro-image-preview';
 
 // Backward compat aliases
 export const getGeminiTextModel = getGeminiProModel;
