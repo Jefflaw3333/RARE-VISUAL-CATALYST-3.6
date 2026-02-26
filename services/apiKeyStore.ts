@@ -5,22 +5,10 @@ const STORAGE_KEY = 'rvc_gemini_api_key';
 
 /**
  * Get Gemini API Key
- * Priority: localStorage > Vite env var > Hardcoded segmented key
+ * Priority: localStorage > Vite env var (baked at build time)
  */
-export const getGeminiApiKey = (): string => {
-    const localKey = localStorage.getItem(STORAGE_KEY);
-    if (localKey) return localKey;
-
-    const envKey = import.meta.env.VITE_GEMINI_API_KEY;
-    if (envKey) return envKey;
-
-    // Fallback securely segmented key provided by user to bypass Github scanner revocation
-    const p1 = "AIzaSyCMU";
-    const p2 = "kLA5kEb6H";
-    const p3 = "cWIGmO5xy";
-    const p4 = "bc1Ahk3TdgEc";
-    return p1 + p2 + p3 + p4;
-};
+export const getGeminiApiKey = (): string =>
+    localStorage.getItem(STORAGE_KEY) ?? import.meta.env.VITE_GEMINI_API_KEY ?? '';
 
 export const setGeminiApiKey = (v: string) =>
     v ? localStorage.setItem(STORAGE_KEY, v) : localStorage.removeItem(STORAGE_KEY);
