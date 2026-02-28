@@ -212,18 +212,8 @@ const parseDescription = (text: string | undefined): { en: string; cn: string } 
 const descriptionInstruction = `\n\nFinally, provide a short one-sentence descriptive caption in both English and Chinese. Format as JSON: {"en": "...", "cn": "..."}.`;
 
 async function generateSocialCopyForImage(image: ImageRef, productInfo: ProductInfo): Promise<{ en: string; cn: string; }> {
-    const ai = getAiClient();
-    const imagePart = { inlineData: { data: image.base64, mimeType: image.mimeType } };
-    const socialCopyPrompt = `Expert copywriter persona. Analyze image for product: ${productInfo.name}. Create engaging post. 
-    RETURN ONLY RAW JSON. NO MARKDOWN.
-    Format: {"english_post": "...", "chinese_post": "..."}`;
-    // 🔥 PRO MODEL — image analysis + copy generation with vision
-    const response = await ai.models.generateContent({
-        model: getGeminiProModel(),
-        contents: { parts: [imagePart, { text: socialCopyPrompt }] }
-    });
-    const parsed = parseJSON(response.text || "{}");
-    return { en: parsed.english_post, cn: parsed.chinese_post };
+    // Disabled to save tokens as requested by user
+    return { en: "", cn: "" };
 }
 
 interface CreativePromptResult {
@@ -239,7 +229,9 @@ async function generateCreativeImagePrompts(
     productInfo: ProductInfo,
     generationDescription: string,
     generationOptions: GenerationOptions,
-    customLifestyle: CustomLifestyle
+    customLifestyle: CustomLifestyle,
+    hasOutfitRef: boolean,
+    hasMultipleSubjects: boolean
 ): Promise<CreativePromptResult[]> {
     const ai = getAiClient();
     const { lifestyleScene, selectedSocialStrategies, consistencyMode, sensualMode, ugcMode, styleFilter, creativityBoost, targetRegion, targetAudience, selectedFocusSubjects } = generationOptions;
@@ -274,6 +266,9 @@ async function generateCreativeImagePrompts(
         `
         : "";
 
+    const outfitInstruction = hasOutfitRef ? "CRITICAL: The user has provided outfit/clothing reference images. You MUST generate prompts that strictly instruct the image AI to dress the character in exactly this provided outfit style." : "";
+    const characterInstruction = hasMultipleSubjects ? "CRITICAL: The user has provided multiple images (up to 6) of the main subject/character. You MUST ensure the generated prompts heavily emphasize maintaining the exact physical appearance, facial identity, and consistency of this main subject across all generated images." : "";
+
     const promptRequest = `Visual Director Persona. 
     Product: ${productInfo.name}. 
     User Goal: ${generationDescription}. 
@@ -281,6 +276,8 @@ async function generateCreativeImagePrompts(
     Style: ${styleFilterDesc}. 
     
     ${ugcInstruction}
+    ${outfitInstruction}
+    ${characterInstruction}
     
     Strategy: ${socialStrategyContext}. 
     Creativity: ${creativityBoost ? 'High' : 'Standard'}. 
@@ -293,8 +290,12 @@ async function generateCreativeImagePrompts(
     Write rich prompts for each angle below. Ensure the "Emphasis/Focus Details" are highlighted in the prompt for every angle if applicable.
     ${ugcMode ? 'Ensure every single prompt adheres to the Lo-Fi/UGC aesthetic instructions above, varying the specific type of authenticity (flash vs daylight vs texture).' : ''}
     
-    Output JSON: { "perspectives": [ { "imagePrompt": "...", "veoPrompt": "..." } ] } 
-    Angles: ${expandedAnglesWithIds.map(a => a.angle).join('\n')}
+    You MUST return EXACTLY ${expandedAnglesWithIds.length} items in the "perspectives" array.
+    Angles to generate prompts for:
+    ${expandedAnglesWithIds.map((a, idx) => `${idx + 1}. ${a.angle}`).join('\n')}
+    
+    Output JSON exactly matching this structure:
+    { "perspectives": [ { "imagePrompt": "...", "veoPrompt": "..." } ] } 
     
     RETURN ONLY RAW JSON. NO MARKDOWN.`;
 
@@ -318,6 +319,10 @@ async function generateCreativeImagePrompts(
 
     if (!perspectivesArray || !Array.isArray(perspectivesArray) || perspectivesArray.length === 0) {
         throw new Error("Invalid/Empty perspectives array in response");
+    }
+
+    if (perspectivesArray.length !== expandedAnglesWithIds.length) {
+        throw new Error(`AI ignored the quantity request: requested ${expandedAnglesWithIds.length} angles, but AI returned ${perspectivesArray.length} prompts. Please try again or rephrase your input.`);
     }
 
     return perspectivesArray.map((p: any, i: number) => ({
@@ -348,6 +353,7 @@ export const generateContentFromImage = async (
     secondaryImages: ImageRef[],
     focusImageRef: FocusImageRef,
     referenceImages: ImageRef[],
+    outfitReferenceImages: ImageRef[],
     productInfo: ProductInfo,
     generationOptions: GenerationOptions,
     customLifestyle: CustomLifestyle,
@@ -359,34 +365,40 @@ export const generateContentFromImage = async (
     const mainImagePart = { inlineData: { data: mainImage.base64, mimeType: mainImage.mimeType } };
     const secondaryImageParts = secondaryImages.map(img => ({ inlineData: { data: img.base64, mimeType: img.mimeType } }));
     const referenceImageParts = referenceImages.map(img => ({ inlineData: { data: img.base64, mimeType: img.mimeType } }));
-    const allImageParts: any[] = [mainImagePart, ...secondaryImageParts, ...referenceImageParts];
+    const outfitReferenceImageParts = outfitReferenceImages.map(img => ({ inlineData: { data: img.base64, mimeType: img.mimeType } }));
+    const allImageParts: any[] = [mainImagePart, ...secondaryImageParts, ...referenceImageParts, ...outfitReferenceImageParts];
     setLoadingMessage('Crafting social strategy & copy...');
     const { selectedSocialPlatforms, selectedSocialStrategies, selectedAngles, generateSocialCopy, aspectRatio, customDimensions, imagesPerAngle = 1 } = generationOptions;
     const targetAspectRatio = calculateClosestAspectRatio(aspectRatio || '1:1', customDimensions);
     let socialPosts: SocialPosts = {};
     try {
 
-        const strategyInstruction = selectedSocialStrategies.length > 0 ? `Tone/Strategy: ${selectedSocialStrategies.map(id => strategyPromptMap[id]).join(', ')}` : '';
-        const socialPrompt = `Social Manager Persona. Copy for: ${selectedSocialPlatforms.join(', ')}. Product: ${productInfo.name}. ${strategyInstruction}. Goal: ${generationDescription}.
+        // SKIP PRO MODEL SOCIAL COPY GENERATION TO SAVE TOKENS
+        /*
+        const strategyInstruction = selectedSocialStrategies.length > 0 ? \`Tone/Strategy: \${selectedSocialStrategies.map(id => strategyPromptMap[id]).join(', ')}\` : '';
+        const socialPrompt = \`Social Manager Persona. Copy for: \${selectedSocialPlatforms.join(', ')}. Product: \${productInfo.name}. \${strategyInstruction}. Goal: \${generationDescription}.
         RETURN ONLY RAW JSON. NO MARKDOWN.
-        Format: { "facebook": "...", "instagram": "...", ... }`;
+        Format: { "facebook": "...", "instagram": "...", ... }\`;
         // 🔥 PRO MODEL — social copy uses images, needs full vision + quality
         const socialResponse = await ai.models.generateContent({
             model: getGeminiProModel(), contents: { parts: [...allImageParts, { text: socialPrompt }] }
         });
-        console.log(`[Gemini Service] Social copy → PRO model: ${getGeminiProModel()}`);
+        console.log(\`[Gemini Service] Social copy → PRO model: \${getGeminiProModel()}\`);
         const parsedSocial = parseJSON(socialResponse.text || "{}");
         selectedSocialPlatforms.forEach(platform => {
             const key = platform.toLowerCase() as keyof SocialPosts;
             if (parsedSocial[key]) socialPosts[key] = parsedSocial[key];
         });
+        */
     } catch (e) { }
     setLoadingMessage(`Designing perspectives...`);
     const expandedAnglesWithIds: { angle: string, id: string, index: number }[] = [];
     selectedAngles.forEach(angleId => { for (let i = 0; i < imagesPerAngle; i++) { expandedAnglesWithIds.push({ angle: imagesPerAngle > 1 ? `${angleId} (Var ${i + 1})` : angleId, id: angleId, index: i + 1 }); } });
     let creativePerspectives: CreativePromptResult[] = [];
     try {
-        creativePerspectives = await generateCreativeImagePrompts([mainImagePart, ...referenceImageParts], expandedAnglesWithIds, productInfo, generationDescription, generationOptions, customLifestyle);
+        const hasOutfitRef = outfitReferenceImages.length > 0;
+        const hasMultipleSubjects = secondaryImages.length > 0;
+        creativePerspectives = await generateCreativeImagePrompts([mainImagePart, ...secondaryImageParts, ...referenceImageParts, ...outfitReferenceImageParts], expandedAnglesWithIds, productInfo, generationDescription, generationOptions, customLifestyle, hasOutfitRef, hasMultipleSubjects);
     } catch (e: any) {
         console.error('⚠️ generateCreativeImagePrompts failed:', e);
         console.error('Stack trace:', e.stack);
